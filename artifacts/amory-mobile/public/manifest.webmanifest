@@ -1,0 +1,29 @@
+{
+  "id": "/",
+  "name": "العموري لقطع غيار السيارات",
+  "short_name": "العموري",
+  "description": "نظام شامل وسريع لإدارة مخزون ومبيعات ومشتريات وحسابات قطع غيار السيارات",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "dir": "rtl",
+  "lang": "ar",
+  "background_color": "#09090b",
+  "theme_color": "#09090b",
+  "categories": ["business", "finance", "productivity"],
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}

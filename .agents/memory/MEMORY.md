@@ -1,0 +1,1 @@
+- [Workspace dependency scope](workspace-dependency-scope.md) — add app-only packages to the owning artifact package, not the workspace root.

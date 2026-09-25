@@ -1,0 +1,98 @@
+@import "tailwindcss";
+@variant dark (&:where(.dark, .dark *));
+@custom-variant dark (&:where(.dark, .dark *));
+@layer base {
+  :root { color-scheme: light; }
+  :root.dark { color-scheme: dark; }
+  * { font-family: 'Cairo', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif; -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
+  html, body { min-height: 100dvh; overflow-x: hidden; }
+  input, select, textarea, button { font: inherit; }
+  button { touch-action: manipulation; }
+  @media (max-width: 767px) { input, select, textarea { font-size: 16px !important; } }
+}
+html, body, #root { width: 100%; max-width: 100%; }
+body { margin: 0; }
+.pb-safe { padding-bottom: max(1rem, env(safe-area-inset-bottom)); }
+.pt-safe { padding-top: max(0.5rem, env(safe-area-inset-top)); }
+.wrap-text, .break-mobile { min-width: 0; max-width: 100%; overflow-wrap: anywhere; word-break: break-word; white-space: normal; }
+.tabular-nums { font-variant-numeric: tabular-nums; }
+.truncate, .line-clamp-1, .line-clamp-2, .line-clamp-3, .line-clamp-4 { display: block !important; -webkit-line-clamp: unset !important; line-clamp: unset !important; white-space: normal !important; overflow: visible !important; text-overflow: clip !important; overflow-wrap: anywhere !important; word-break: break-word !important; min-width: 0 !important; max-width: 100% !important; }
+:root { --mobile-header-h: calc(3.75rem + env(safe-area-inset-top, 0px)); --mobile-nav-h: calc(4.5rem + env(safe-area-inset-bottom, 0px)); --mobile-action-h: 78px; }
+@media (max-width: 767px) {
+  html, body, #root { width: 100%; height: 100%; min-height: 100%; overflow: hidden !important; overscroll-behavior: none; -webkit-text-size-adjust: 100%; }
+  body { position: fixed; inset: 0; touch-action: manipulation; }
+  .mobile-app-shell { position: fixed !important; inset: 0 !important; width: 100% !important; height: 100dvh !important; min-height: 100dvh !important; max-height: 100dvh !important; overflow: hidden !important; display: flex !important; flex-direction: column !important; }
+  .mobile-app-main { position: relative !important; flex: 1 1 auto !important; min-height: 0 !important; height: auto !important; width: 100% !important; overflow: hidden !important; padding-top: var(--mobile-header-h) !important; padding-bottom: var(--mobile-nav-h) !important; margin: 0 !important; }
+  .mobile-main-scroll { position: absolute !important; inset: var(--mobile-header-h) 0 var(--mobile-nav-h) 0 !important; width: 100% !important; height: auto !important; min-height: 0 !important; overflow: hidden !important; padding: 0 !important; display: flex !important; flex-direction: column !important; }
+  .mobile-screen-host { flex: 1 1 auto; min-height: 0; width: 100%; max-width: 100%; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; scrollbar-width: none; padding: 0; }
+  .mobile-screen-host::-webkit-scrollbar { display: none; }
+  .mobile-screen-host > * { min-width: 0; max-width: 100%; }
+  .mobile-screen-host > div:first-child { min-width: 0; max-width: 100%; }
+  .mobile-screen-host .space-y-6 > :not([hidden]) ~ :not([hidden]) { margin-top: 1rem; }
+  .mobile-screen-host .space-y-5 > :not([hidden]) ~ :not([hidden]) { margin-top: .9rem; }
+  .mobile-screen-host .space-y-4 > :not([hidden]) ~ :not([hidden]) { margin-top: .75rem; }
+  button { min-height: 44px; }
+  input, select, textarea { min-height: 44px; line-height: 1.35 !important; }
+  button.h-7, button.h-8, button.h-9, button.w-7, button.w-8, button.w-9 { min-height: 40px; }
+  .mobile-screen-host .rounded-3xl, .mobile-screen-host .rounded-2xl, .mobile-screen-host .rounded-xl { max-width: 100%; }
+  .mobile-screen-host .grid { min-width: 0; }
+  .mobile-screen-host [class*="grid-cols-"] > * { min-width: 0; }
+  .mobile-screen-host .overflow-x-auto { max-width: 100%; -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; }
+  .mobile-bottom-nav { position: fixed !important; left: 0 !important; right: 0 !important; bottom: 0 !important; height: var(--mobile-nav-h) !important; min-height: var(--mobile-nav-h) !important; padding: 0 3px env(safe-area-inset-bottom, 0px) !important; z-index: 80 !important; display: grid !important; grid-template-columns: repeat(5, minmax(0, 1fr)); background: rgba(255,255,255,.96); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); box-shadow: 0 -10px 30px rgba(15,23,42,.10); }
+  .dark .mobile-bottom-nav { background: rgba(9,9,11,.96); }
+  .mobile-bottom-nav button { min-width: 0; min-height: 50px; height: 100%; padding: 5px 2px; gap: 2px; }
+  .mobile-bottom-nav button span { max-width: 100%; overflow-wrap: anywhere; word-break: break-word; white-space: normal !important; line-height: 1.05 !important; font-size: clamp(.58rem, 2.6vw, .68rem) !important; }
+  .mobile-top-header { position: fixed !important; top: 0 !important; left: 0 !important; right: 0 !important; height: var(--mobile-header-h) !important; min-height: var(--mobile-header-h) !important; padding: env(safe-area-inset-top, 0px) 10px 0 !important; z-index: 85 !important; display: flex !important; align-items: center !important; }
+  .mobile-top-header > div:first-child { min-width: 0; flex: 1 1 auto; }
+  .mobile-top-header > div:first-child > span:last-child { min-width: 0; overflow-wrap: anywhere; white-space: normal !important; line-height: 1.15; }
+  .mobile-top-header button { width: 40px; height: 40px; min-height: 40px; }
+  [role="dialog"] { max-width: calc(100vw - 20px) !important; max-height: calc(100dvh - 24px) !important; overscroll-behavior: contain; }
+  .mobile-action-bar { position: fixed !important; left: 8px !important; right: 8px !important; bottom: calc(var(--mobile-nav-h) + 7px) !important; width: auto !important; min-height: var(--mobile-action-h) !important; z-index: 75 !important; padding: 8px !important; border-radius: 18px !important; border: 1px solid rgba(148,163,184,.22) !important; box-shadow: 0 12px 32px rgba(15,23,42,.18) !important; gap: 7px !important; }
+  .mobile-action-bar .mobile-total { min-width: 0; flex: 1 1 auto; }
+  .mobile-action-bar .mobile-total-label { font-size: .68rem !important; }
+  .mobile-action-bar .mobile-total-amount { font-size: clamp(.95rem, 4.8vw, 1.25rem) !important; line-height: 1.15 !important; white-space: nowrap; }
+  .mobile-action-bar .mobile-action-buttons { flex: 0 0 auto; gap: 5px !important; }
+  .mobile-action-bar .mobile-action-buttons button { min-width: 70px; min-height: 46px; padding-inline: 10px !important; }
+  .invoice-item-picker-modal { width: min(94vw, 520px) !important; max-width: min(94vw, 520px) !important; max-height: min(82dvh, 680px) !important; margin: auto !important; border-radius: 22px !important; z-index: 100 !important; }
+  .invoice-item-picker-modal .invoice-picker-results { max-height: min(42dvh, 340px) !important; overflow-y: auto !important; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+  .invoice-item-picker-modal .invoice-picker-results > button { min-height: 0; width: 100%; }
+  body:has(.invoice-item-picker-modal) .mobile-action-bar { visibility: hidden !important; pointer-events: none !important; }
+  .mobile-screen-host form, .mobile-screen-host input, .mobile-screen-host select, .mobile-screen-host textarea { max-width: 100%; }
+  @media (max-width: 390px) {
+    .mobile-screen-host .grid.grid-cols-2 { grid-template-columns: minmax(0, 1fr) !important; }
+    .mobile-screen-host .p-6 { padding: 1rem !important; }
+    .mobile-screen-host .p-5 { padding: .9rem !important; }
+    .mobile-screen-host .p-4 { padding: .8rem !important; }
+    .mobile-screen-host .gap-4 { gap: .65rem !important; }
+    .mobile-screen-host .gap-5 { gap: .75rem !important; }
+    .mobile-screen-host .text-2xl { font-size: 1.25rem !important; }
+    .mobile-screen-host .text-xl { font-size: 1.1rem !important; }
+    .mobile-action-bar .mobile-action-buttons button { min-width: 66px; padding-inline: 8px !important; }
+  }
+  @media (max-width: 340px) {
+    .mobile-top-header { padding-left: 7px !important; padding-right: 7px !important; }
+    .mobile-top-header .text-base { font-size: .9rem !important; }
+    .mobile-top-header .text-xs { font-size: .66rem !important; }
+    .mobile-action-bar { left: 5px !important; right: 5px !important; }
+    .mobile-action-bar .mobile-total-label { font-size: .6rem !important; }
+    .mobile-action-bar .mobile-total-amount { font-size: .88rem !important; }
+    .mobile-action-bar .mobile-action-buttons button { min-width: 60px; font-size: .72rem !important; }
+    .mobile-bottom-nav button span { font-size: .55rem !important; }
+  }
+}
+@media print {
+  @page { margin: 8mm; size: auto; }
+  *, *::before, *::after { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+  body { background: white !important; color: black !important; font-family: 'Cairo', Arial, sans-serif !important; }
+  .no-print { display: none !important; }
+  .print-only { display: block !important; }
+  .thermal-receipt { width: 78mm !important; max-width: 78mm !important; margin: 0 auto !important; font-size: 11px !important; padding: 2mm !important; box-shadow: none !important; border: none !important; }
+  .a4-invoice { width: 100% !important; max-width: 100% !important; margin: 0 !important; padding: 0 !important; box-shadow: none !important; border: none !important; }
+  .invoice-grid-table { border-collapse: collapse !important; width: 100% !important; border: 1.5px solid #000 !important; }
+  .invoice-grid-table th, .invoice-grid-table td { border: 1px solid #000 !important; }
+}
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: #f1f5f9; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+.dark ::-webkit-scrollbar-track { background: #18181b; }
+.dark ::-webkit-scrollbar-thumb { background: #3f3f46; }

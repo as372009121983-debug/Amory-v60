@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "AMORY Auto Parts"
+description = "A mobile-friendly inventory and accounting app for an auto-parts shop, with sales and purchase invoices, stock management, file imports, offline support, and cloud sync."
+version = "1.0.0"
+id = "artifacts/amory-mobile"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 24083
+
+[services.development]
+run = "pnpm --filter @workspace/amory-mobile run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/amory-mobile", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/amory-mobile/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "24083"
+BASE_PATH = "/"
