@@ -137,10 +137,34 @@ export function parseArabicNumber(val: any, defaultVal = 0): number {
   if (['-', '--', '---', 'n/a', 'null', 'undefined', ''].includes(str.toLowerCase())) {
     return defaultVal;
   }
-  str = str.replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 1632));
-  str = str.replace(/ج\.م|egp|usd|\$|€|£/gi, '').replace(/[,،\s]/g, '');
-  if (str === '' || str === '.') return defaultVal;
-  const num = parseFloat(str);
+  const accountingNegative = /^\s*\(.*\)\s*$/.test(str);
+  if (accountingNegative) str = str.replace(/^\s*\(|\)\s*$/g, '');
+  str = str
+    .replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 1632))
+    .replace(/[۰-۹]/g, (d) => String(d.charCodeAt(0) - 1776))
+    .replace(/[−﹣－]/g, '-')
+    .replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '')
+    .replace(/ج\.م|جنيه(?:\s*مصري)?|egp|usd|\$|€|£/gi, '')
+    .replace(/[٫]/g, '.')
+    .replace(/[٬،]/g, '')
+    .replace(/[\s\u00a0\u202f]/g, '');
+
+  // Accept decimal-comma files such as 12,5 while keeping 1,234 as a
+  // thousands-grouped integer. A decimal point takes precedence if present.
+  if (str.includes(',') && !str.includes('.')) {
+    const commaCount = (str.match(/,/g) || []).length;
+    if (commaCount === 1 && /,\d{1,2}$/.test(str)) {
+      str = str.replace(',', '.');
+    } else {
+      str = str.replace(/,/g, '');
+    }
+  } else {
+    str = str.replace(/,/g, '');
+  }
+
+  if (accountingNegative && !str.startsWith('-')) str = `-${str}`;
+  if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(str)) return defaultVal;
+  const num = Number(str);
   if (!Number.isFinite(num)) return defaultVal;
   if (Math.abs(num) < 0.0001) return 0;
   const rounded = Math.round(num * 100) / 100;
@@ -191,7 +215,7 @@ export async function decodeImportFile(file: File): Promise<{ text: string; sour
     file.type === 'application/vnd.ms-excel';
 
   if (isXlsx) {
-    const buffer = await file.arrayBuffer();
+    const buffer = await readFileAsArrayBuffer(file);
     const workbook = XLSX.read(buffer, { type: 'array', cellDates: false, raw: false });
     const sheetName = workbook.SheetNames[0];
     if (!sheetName) throw new Error('ملف Excel لا يحتوي على أي ورقة بيانات.');
@@ -201,7 +225,7 @@ export async function decodeImportFile(file: File): Promise<{ text: string; sour
     return { text, sourceFormat: 'xlsx' };
   }
 
-  const buffer = await file.arrayBuffer();
+  const buffer = await readFileAsArrayBuffer(file);
   const bytes = new Uint8Array(buffer);
   if (bytes.length === 0) throw new Error('الملف فارغ.');
 
@@ -250,6 +274,19 @@ export async function decodeImportFile(file: File): Promise<{ text: string; sour
   }
 
   return { text: text.replace(/^\uFEFF/, ''), sourceFormat: 'csv' };
+}
+
+function readFileAsArrayBuffer(file: File): Promise<ArrayBuffer> {
+  if (typeof file.arrayBuffer === 'function') return file.arrayBuffer();
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (reader.result instanceof ArrayBuffer) resolve(reader.result);
+      else reject(new Error('تعذر قراءة الملف من الجهاز.'));
+    };
+    reader.onerror = () => reject(reader.error || new Error('تعذر قراءة الملف من الجهاز.'));
+    reader.readAsArrayBuffer(file);
+  });
 }
 
 // ============================================================================
@@ -388,6 +425,145 @@ function getCol(row: Record<string, string>, keys: readonly string[]): string {
   return '';
 }
 
+interface MatchedColumn {
+  key: string;
+  value: string;
+}
+
+function getColEntry(row: Record<string, string>, keys: readonly string[]): MatchedColumn | null {
+  let firstPresent: MatchedColumn | null = null;
+  for (const k of keys) {
+    const ck = cleanKey(k);
+    const value = row[ck] !== undefined ? row[ck] : row[k];
+    if (value === undefined) continue;
+    const entry = { key: ck, value };
+    if (value !== '') return entry;
+    if (!firstPresent) firstPresent = entry;
+  }
+  return firstPresent;
+}
+
+function hasNumericValue(value: string | undefined): boolean {
+  if (value === undefined || value.trim() === '') return false;
+  const cleaned = value.trim().toLowerCase();
+  return !EMPTY_MARKERS.has(cleaned) && !['-', '--', '---', 'n/a'].includes(cleaned);
+}
+
+function parseImportNumber(value: string | undefined, label: string, defaultValue = 0): number {
+  if (!hasNumericValue(value)) return defaultValue;
+  const parsed = parseArabicNumber(value, Number.NaN);
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`${label} «${value}» ليست قيمة رقمية مفهومة. راجع تنسيق هذا الصف.`);
+  }
+  return parsed;
+}
+
+const CUSTOMER_DEBT_COLUMNS = [
+  'مديونية',
+  'المديونية',
+  'مديونية العميل',
+  'الرصيد المدين',
+  'رصيد مدين',
+  'عليه',
+  'عليه لنا',
+  'مستحق لنا',
+  'المبلغ المستحق من العميل',
+  'المطلوب من العميل',
+  'اجمالي المديونية',
+  'إجمالي المديونية',
+  'customer_debt',
+  'debt',
+  'debt_amount',
+  'amount_due',
+  'receivable',
+  'amount_due_from_customer',
+] as const;
+
+const CUSTOMER_CREDIT_COLUMNS = [
+  'الرصيد الدائن',
+  'رصيد دائن',
+  'له عندنا',
+  'مستحق للعميل',
+  'رصيد لصالح العميل',
+] as const;
+
+const SUPPLIER_PAYABLE_COLUMNS = [
+  'الرصيد المستحق له',
+  'مستحق له',
+  'مستحق للمورد',
+  'له علينا',
+  'المستحق للمورد',
+  'اجمالي المستحق للمورد',
+  'إجمالي المستحق للمورد',
+  'الرصيد الدائن',
+  'supplier_payable',
+  'amount_due_to_supplier',
+] as const;
+
+const SUPPLIER_ADVANCE_COLUMNS = [
+  'الرصيد المدين',
+  'رصيد مدين',
+  'لنا عند المورد',
+  'لنا عنده',
+  'سلفة للمورد',
+  'دفعات مقدمة للمورد',
+] as const;
+
+function normalizeImportedPartyBalance(type: 'customers' | 'suppliers', columnKey: string, balance: number): number {
+  const normalizedKey = cleanKey(columnKey);
+  const absoluteValue = Math.abs(balance);
+  if (type === 'customers') {
+    if (CUSTOMER_DEBT_COLUMNS.some((key) => cleanKey(key) === normalizedKey)) return absoluteValue;
+    if (CUSTOMER_CREDIT_COLUMNS.some((key) => cleanKey(key) === normalizedKey)) return -absoluteValue;
+  } else {
+    if (SUPPLIER_PAYABLE_COLUMNS.some((key) => cleanKey(key) === normalizedKey)) return absoluteValue;
+    if (SUPPLIER_ADVANCE_COLUMNS.some((key) => cleanKey(key) === normalizedKey)) return -absoluteValue;
+  }
+  return balance;
+}
+
+export interface NumericImportPreview {
+  label: string;
+  header: string | null;
+  populatedRows: number;
+  invalidRows: number;
+  nonZeroRows: number;
+  total: number;
+}
+
+export function getNumericImportPreview(rawCsvText: string, type: ImportType): NumericImportPreview {
+  const { headers, rows } = parseCsvText(rawCsvText);
+  const keys = type === 'items'
+    ? ITEM_COLUMNS.stock
+    : type === 'customers'
+      ? PARTY_COLUMNS.customers.balance
+      : PARTY_COLUMNS.suppliers.balance;
+  const header = keys.find((key) => headers.includes(cleanKey(key))) || null;
+  const label = type === 'items' ? 'المخزون' : 'الرصيد';
+  let populatedRows = 0;
+  let invalidRows = 0;
+  let nonZeroRows = 0;
+  let total = 0;
+
+  for (const row of rows) {
+    const entry = getColEntry(row, keys);
+    if (!entry || !hasNumericValue(entry.value)) continue;
+    const value = parseArabicNumber(entry.value, Number.NaN);
+    if (!Number.isFinite(value)) {
+      invalidRows++;
+      continue;
+    }
+    const normalized = type === 'items'
+      ? value
+      : normalizeImportedPartyBalance(type, entry.key, value);
+    populatedRows++;
+    if (normalized !== 0) nonZeroRows++;
+    total += normalized;
+  }
+
+  return { label, header, populatedRows, invalidRows, nonZeroRows, total };
+}
+
 // ============================================================================
 // خرائط الأعمدة لكل نوع بيانات: الاسم القياسي في ملفات المحل أولًا، ثم البدائل
 // ============================================================================
@@ -405,7 +581,18 @@ const ITEM_COLUMNS = {
   wholesalePrice: ['سعر البيع جملة', 'سعر البيع جمله', 'سعر بيع جملة', 'بيع جملة', 'سعر الجملة', 'سعر الجمله', 'الجملة', 'الجمله', 'جملة', 'جمله', 'wholesale_price'],
   minSellingPrice: ['اقل سعر بيع', 'أقل سعر بيع', 'اقل سعر', 'أقل سعر', 'min_selling_price'],
   maxSellingPrice: ['اعلى سعر بيع', 'اعلي سعر بيع', 'أعلى سعر بيع', 'اعلى سعر', 'أعلى سعر', 'max_selling_price'],
-  stock: ['الرصيد الحالي', 'الرصيد الحالى', 'رصيد حالي', 'الرصيد', 'رصيد', 'الكمية', 'الكميه', 'كمية', 'كميه', 'العدد', 'عدد', 'المخزون', 'مخزون', 'رصيد أول المدة', 'رصيد اول المدة', 'initial_stock', 'current_stock', 'quantity', 'qty', 'stock', 'balance'],
+  stock: [
+    'الرصيد الحالي', 'الرصيد الحالى', 'رصيد حالي', 'الرصيد', 'رصيد',
+    'الكمية الحالية', 'كمية حالية', 'كمية المخزون', 'الرصيد بالمخزن', 'رصيد المخزون',
+    'الكمية المتاحة', 'كمية متاحة', 'الكمية المتوفرة', 'كمية متوفرة', 'المخزون الحالي',
+    'كمية الصنف', 'عدد القطع', 'العدد الحالي', 'الكمية', 'الكميه', 'كمية', 'كميه',
+    'العدد', 'عدد', 'المخزون', 'مخزون', 'رصيد أول المدة', 'رصيد اول المدة',
+    'الرصيد الافتتاحي', 'رصيد افتتاحي', 'initial_stock', 'current_stock',
+    'quantity', 'qty', 'stock', 'balance', 'stock_quantity', 'quantity_on_hand',
+    'on_hand', 'available_quantity', 'available_stock', 'inventory_quantity',
+    'current_quantity', 'current_qty', 'quantity_in_stock', 'stock_qty',
+    'units_in_stock', 'in_stock', 'inventory',
+  ],
   minStock: ['حد أدنى', 'حد ادنى', 'حد ادني', 'الحد الادنى', 'الحد الادني', 'الحد الأدنى', 'حد الطلب', 'min_stock'],
   category: ['الفئة', 'الفئه', 'فئة', 'فئه', 'القسم', 'قسم', 'التصنيف', 'تصنيف', 'المجموعة', 'category'],
   unit: ['الوحدة', 'الوحده', 'وحدة', 'وحده', 'unit'],
@@ -414,18 +601,27 @@ const ITEM_COLUMNS = {
 
 const PARTY_COLUMNS = {
   customers: {
-    name: ['اسم العميل', 'الاسم', 'اسم', 'العميل', 'name'],
-    phone: ['رقم الهاتف', 'الهاتف', 'هاتف', 'الموبايل', 'موبايل', 'تليفون', 'التليفون', 'الجوال', 'phone'],
+    name: ['اسم العميل', 'اسم الزبون', 'الاسم', 'اسم', 'العميل', 'اسم الطرف', 'name'],
+    phone: ['رقم الهاتف', 'الهاتف', 'هاتف', 'الموبايل', 'رقم الموبايل', 'موبايل', 'تليفون', 'التليفون', 'الجوال', 'رقم الجوال', 'phone'],
     address: ['العنوان', 'عنوان', 'الموقع', 'موقع', 'البلد', 'المدينة', 'address', 'location'],
-    balance: ['الرصيد الحالي', 'الرصيد الحالى', 'الرصيد', 'رصيد', 'الرصيد الافتتاحي', 'رصيد افتتاحي', 'opening_balance', 'initial_balance', 'balance'],
+    balance: [
+      'الرصيد الحالي', 'الرصيد الحالى', 'الرصيد', 'رصيد', 'الرصيد الافتتاحي', 'رصيد افتتاحي',
+      ...CUSTOMER_DEBT_COLUMNS, ...CUSTOMER_CREDIT_COLUMNS,
+      'opening_balance', 'initial_balance', 'current_balance', 'balance',
+      'debt', 'amount_due', 'receivable',
+    ],
     creditLimit: ['الحد الائتماني', 'حد الائتمان', 'حد ائتماني', 'سقف الائتمان', 'credit_limit'],
     notes: ['الملاحظات', 'ملاحظات', 'البيان', 'بيان', 'notes'],
   },
   suppliers: {
-    name: ['اسم المورد', 'الاسم', 'اسم', 'المورد', 'name'],
-    phone: ['رقم الهاتف', 'الهاتف', 'هاتف', 'الموبايل', 'موبايل', 'تليفون', 'التليفون', 'الجوال', 'phone'],
+    name: ['اسم المورد', 'الاسم', 'اسم', 'المورد', 'اسم الطرف', 'name'],
+    phone: ['رقم الهاتف', 'الهاتف', 'هاتف', 'الموبايل', 'رقم الموبايل', 'موبايل', 'تليفون', 'التليفون', 'الجوال', 'رقم الجوال', 'phone'],
     address: ['العنوان', 'عنوان', 'الموقع', 'موقع', 'البلد', 'المدينة', 'address', 'location'],
-    balance: ['الرصيد المستحق له', 'الرصيد الحالي', 'الرصيد الحالى', 'الرصيد', 'رصيد', 'الرصيد الافتتاحي', 'رصيد افتتاحي', 'opening_balance', 'initial_balance', 'balance'],
+    balance: [
+      'الرصيد المستحق له', 'الرصيد الحالي', 'الرصيد الحالى', 'الرصيد', 'رصيد',
+      'الرصيد الافتتاحي', 'رصيد افتتاحي', ...SUPPLIER_PAYABLE_COLUMNS, ...SUPPLIER_ADVANCE_COLUMNS,
+      'opening_balance', 'initial_balance', 'current_balance', 'balance', 'payable',
+    ],
     notes: ['الملاحظات', 'ملاحظات', 'البيان', 'بيان', 'notes'],
   },
 } as const;
@@ -440,12 +636,19 @@ export function detectFileFingerprint(
 ): { type: ImportType; typeNameAr: string } {
   const hSet = new Set(headers.map(cleanKey));
 
-  const customerSpecific = ['اسم العميل', 'العميل', 'عميل', 'الحد الائتماني', 'حد الائتمان', 'كود العميل', 'نوع العميل', 'مديونية', 'سقف الائتمان', 'تليفون العميل'].map(cleanKey);
-  const supplierSpecific = ['اسم المورد', 'المورد', 'مورد', 'كود المورد', 'الرقم الضريبي', 'رقم تسجيل ضريبي', 'اسم المسؤول', 'الرصيد المستحق له', 'تليفون المورد'].map(cleanKey);
+  const customerSpecific = [
+    'اسم العميل', 'العميل', 'عميل', 'الحد الائتماني', 'حد الائتمان', 'كود العميل',
+    'نوع العميل', 'مديونية', 'الرصيد المدين', 'عليه', 'مستحق لنا', 'سقف الائتمان', 'تليفون العميل',
+  ].map(cleanKey);
+  const supplierSpecific = [
+    'اسم المورد', 'المورد', 'مورد', 'كود المورد', 'الرقم الضريبي', 'رقم تسجيل ضريبي',
+    'اسم المسؤول', 'الرصيد المستحق له', 'مستحق للمورد', 'له علينا', 'تليفون المورد',
+  ].map(cleanKey);
   const itemSpecific = [
     'كود الصنف', 'اسم الصنف', 'سعر الشراء', 'سعر البيع', 'سعر البيع قطاعي', 'سعر البيع جملة',
     'سعر التكلفة', 'كود القطعة', 'الباركود', 'رقم oem', 'الرف', 'اقل سعر بيع', 'اعلى سعر بيع',
-    'الموديل', 'الماركة',
+    'الموديل', 'الماركة', 'الكمية الحالية', 'كمية المخزون', 'المخزون الحالي',
+    'quantity_on_hand', 'stock_quantity',
   ].map(cleanKey);
 
   const hasCust = customerSpecific.some((k) => hSet.has(k));
@@ -458,7 +661,11 @@ export function detectFileFingerprint(
   if (hasSupp && !hasItem && !hasCust) return { type: 'suppliers', typeNameAr: TYPE_NAME_AR.suppliers };
 
   // تنسيق عام لبيانات طرف (اسم، هاتف، عنوان، رصيد) بدون أعمدة أصناف مميزة
-  const partyKeywords = ['الاسم', 'اسم', 'الهاتف', 'هاتف', 'رقم الهاتف', 'الموبايل', 'العنوان', 'عنوان', 'الموقع', 'الرصيد', 'رصيد', 'الرصيد الحالي', 'الملاحظات', 'ملاحظات'].map(cleanKey);
+  const partyKeywords = [
+    'الاسم', 'اسم', 'الهاتف', 'هاتف', 'رقم الهاتف', 'الموبايل', 'العنوان', 'عنوان',
+    'الموقع', 'الرصيد', 'رصيد', 'الرصيد الحالي', 'مديونية', 'الرصيد المدين',
+    'payable', 'debt', 'الملاحظات', 'ملاحظات',
+  ].map(cleanKey);
   const partyMatches = partyKeywords.filter((k) => hSet.has(k)).length;
   if (partyMatches >= 2 && !hasItem) {
     if (fallbackType === 'suppliers' || hasSupp) return { type: 'suppliers', typeNameAr: TYPE_NAME_AR.suppliers };
@@ -548,6 +755,9 @@ export async function runStrictImport(
   if (type === 'items') {
     let existingItems = storage.getItems();
     let existingStockMovements = storage.getStockMovements();
+    const currentStockById = options.mode === 'replace'
+      ? new Map<string, number>()
+      : storage.calculateAllItemStocks();
     if (options.mode === 'replace') {
       existingItems = [];
       existingStockMovements = [];
@@ -564,6 +774,38 @@ export async function runStrictImport(
 
     const newItems: Item[] = [];
     const newMovements: StockMovement[] = [];
+
+    const appendItemStockMovement = (
+      item: Item,
+      delta: number,
+      kind: 'initial' | 'adjustment',
+      unitPrice: number,
+    ) => {
+      if (delta === 0) return;
+      const before = currentStockById.get(item.id) ?? 0;
+      const after = Math.round((before + delta) * 100) / 100;
+      const movementId = generateSecureId(kind === 'initial' ? 'sm-init' : 'sm-import');
+      newMovements.push({
+        id: movementId,
+        item_id: item.id,
+        item_name: item.name,
+        movement_type: kind === 'initial' ? 'initial' : delta > 0 ? 'adjustment_in' : 'adjustment_out',
+        doc_type: kind === 'initial' ? 'رصيد أول المدة' : 'تسوية استيراد مخزون',
+        doc_id: kind === 'initial' ? item.id : movementId,
+        doc_number: kind === 'initial' ? `INIT-${item.code}` : `IMP-STOCK-${movementId.slice(-8)}`,
+        party_name: 'استيراد ملف',
+        quantity_in: delta > 0 ? delta : 0,
+        quantity_out: delta < 0 ? Math.abs(delta) : 0,
+        unit_price: unitPrice || item.cost_price || 0,
+        running_balance: after,
+        date: todayDate,
+        notes: kind === 'initial'
+          ? 'استيراد رصيد افتتاحي عبر ملف'
+          : 'تسوية الكمية لتطابق الملف المستورد',
+        created_at: nowIso,
+      });
+      currentStockById.set(item.id, after);
+    };
 
     for (let i = 0; i < rows.length; i++) {
       const lineNum = i + 2;
@@ -586,13 +828,15 @@ export async function runStrictImport(
         const unit = cleanVal(getCol(row, ITEM_COLUMNS.unit)) || 'قطعة';
         const notes = cleanVal(getCol(row, ITEM_COLUMNS.notes));
 
-        const costPrice = parseArabicNumber(getCol(row, ITEM_COLUMNS.costPrice), 0);
-        const retailPrice = parseArabicNumber(getCol(row, ITEM_COLUMNS.retailPrice), 0);
-        const wholesalePrice = parseArabicNumber(getCol(row, ITEM_COLUMNS.wholesalePrice), retailPrice);
-        const minSellingPrice = parseArabicNumber(getCol(row, ITEM_COLUMNS.minSellingPrice), 0);
-        const maxSellingPrice = parseArabicNumber(getCol(row, ITEM_COLUMNS.maxSellingPrice), 0);
-        const initialStock = parseArabicNumber(getCol(row, ITEM_COLUMNS.stock), 0);
-        const minStock = parseArabicNumber(getCol(row, ITEM_COLUMNS.minStock), 0);
+        const costPrice = parseImportNumber(getCol(row, ITEM_COLUMNS.costPrice), 'سعر التكلفة');
+        const retailPrice = parseImportNumber(getCol(row, ITEM_COLUMNS.retailPrice), 'سعر البيع');
+        const wholesalePrice = parseImportNumber(getCol(row, ITEM_COLUMNS.wholesalePrice), 'سعر الجملة', retailPrice);
+        const minSellingPrice = parseImportNumber(getCol(row, ITEM_COLUMNS.minSellingPrice), 'أقل سعر بيع');
+        const maxSellingPrice = parseImportNumber(getCol(row, ITEM_COLUMNS.maxSellingPrice), 'أعلى سعر بيع');
+        const stockEntry = getColEntry(row, ITEM_COLUMNS.stock);
+        const hasStockValue = !!stockEntry && hasNumericValue(stockEntry.value);
+        const initialStock = parseImportNumber(stockEntry?.value, 'كمية المخزون');
+        const minStock = parseImportNumber(getCol(row, ITEM_COLUMNS.minStock), 'الحد الأدنى للمخزون');
 
         const codeKey = code ? cleanKey(code) : null;
         const oemKey = oemNumber ? cleanKey(oemNumber) : null;
@@ -630,33 +874,25 @@ export async function runStrictImport(
             if (maxSellingPrice > 0) existingMatch.max_selling_price = maxSellingPrice;
             if (minStock >= 0) existingMatch.min_stock = minStock;
             if (notes) existingMatch.notes = notes;
-            existingMatch.initial_stock = initialStock;
+            if (hasStockValue) {
+              const currentStock = currentStockById.get(existingMatch.id) ?? Number(existingMatch.initial_stock || 0);
+              const hasMovement = [...existingStockMovements, ...newMovements]
+                .some((movement) => movement.item_id === existingMatch.id);
 
-            const existingMvt = existingStockMovements.find(
-              (m) => m.item_id === existingMatch.id && m.movement_type === 'initial'
-            );
-            if (existingMvt) {
-              existingMvt.quantity_in = initialStock;
-              existingMvt.unit_price = costPrice > 0 ? costPrice : existingMvt.unit_price;
-              existingMvt.running_balance = initialStock;
-            } else if (initialStock > 0) {
-              newMovements.push({
-                id: generateSecureId('sm-init'),
-                item_id: existingMatch.id,
-                item_name: name,
-                movement_type: 'initial',
-                doc_type: 'رصيد أول المدة',
-                doc_id: existingMatch.id,
-                doc_number: `INIT-${existingMatch.code}`,
-                party_name: 'جرد افتتاحي',
-                quantity_in: initialStock,
-                quantity_out: 0,
-                unit_price: costPrice,
-                running_balance: initialStock,
-                date: todayDate,
-                notes: 'استيراد رصيد افتتاحي عبر ملف',
-                created_at: nowIso,
-              });
+              // Older records can have initial_stock but no movement. Materialize that
+              // baseline before appending a reconciliation, or the movement ledger would
+              // replace the legacy fallback stock instead of adding to it.
+              if (!hasMovement && currentStock !== 0) {
+                currentStockById.set(existingMatch.id, 0);
+                appendItemStockMovement(existingMatch, currentStock, 'initial', costPrice);
+              } else {
+                currentStockById.set(existingMatch.id, currentStock);
+              }
+
+              const stockDifference = initialStock - (currentStockById.get(existingMatch.id) ?? 0);
+              if (stockDifference !== 0) {
+                appendItemStockMovement(existingMatch, stockDifference, 'adjustment', costPrice);
+              }
             }
             successCount++;
             await reportProgress(i, `جاري معالجة الأصناف (${(i + 1).toLocaleString('ar-EG')} من ${rows.length.toLocaleString('ar-EG')})...`);
@@ -690,30 +926,13 @@ export async function runStrictImport(
         };
 
         newItems.push(newItem);
+        currentStockById.set(newId, 0);
         if (codeKey) itemByCode.set(codeKey, newItem);
         if (oemKey) itemByCode.set(oemKey, newItem);
         if (barcodeKey) itemByCode.set(barcodeKey, newItem);
         itemByName.set(nameKey, newItem);
 
-        if (initialStock > 0) {
-          newMovements.push({
-            id: generateSecureId('sm-init'),
-            item_id: newId,
-            item_name: name,
-            movement_type: 'initial',
-            doc_type: 'رصيد أول المدة',
-            doc_id: newId,
-            doc_number: `INIT-${itemCode}`,
-            party_name: 'جرد افتتاحي',
-            quantity_in: initialStock,
-            quantity_out: 0,
-            unit_price: costPrice,
-            running_balance: initialStock,
-            date: todayDate,
-            notes: 'استيراد رصيد افتتاحي عبر ملف',
-            created_at: nowIso,
-          });
-        }
+        if (initialStock !== 0) appendItemStockMovement(newItem, initialStock, 'initial', costPrice);
         successCount++;
       } catch (rowErr: any) {
         errors.push({ line: lineNum, data: row, reason: `خطأ في معالجة السطر: ${rowErr?.message || String(rowErr)}` });
@@ -767,25 +986,38 @@ export async function runStrictImport(
         const phone = cleanVal(getCol(row, cols.phone));
         const address = cleanVal(getCol(row, cols.address));
         const notes = cleanVal(getCol(row, cols.notes));
-        const balance = parseArabicNumber(getCol(row, cols.balance), 0);
+        const balanceEntry = getColEntry(row, cols.balance);
+        const balanceHasValue = !!balanceEntry && hasNumericValue(balanceEntry.value);
+        const parsedBalance = parseImportNumber(balanceEntry?.value, 'رصيد الطرف');
+        const balance = balanceEntry
+          ? normalizeImportedPartyBalance(type, balanceEntry.key, parsedBalance)
+          : parsedBalance;
         const creditLimit =
-          type === 'customers' ? parseArabicNumber(getCol(row, (cols as typeof PARTY_COLUMNS.customers).creditLimit), 0) : 0;
+          type === 'customers'
+            ? parseImportNumber(getCol(row, (cols as typeof PARTY_COLUMNS.customers).creditLimit), 'الحد الائتماني')
+            : 0;
 
         const nameKey = cleanKey(name);
         const phoneKey = phone ? cleanKey(phone) : null;
         const existingMatch = byName.get(nameKey) || (phoneKey ? byPhone.get(phoneKey) : undefined);
 
-        const buildInitialMovement = (party: Customer | Supplier, isNew: boolean) => {
-          if (balance === 0) return;
-          const existingMvt = !isNew
-            ? existingAccMovements.find((m) => m.party_id === party.id && m.movement_type === 'initial')
-            : undefined;
+        const buildInitialMovement = (party: Customer | Supplier, targetBalance: number) => {
+          const existingMvt =
+            existingAccMovements.find((m) => m.party_id === party.id && m.party_type === partyType && m.movement_type === 'initial') ||
+            newAccMovements.find((m) => m.party_id === party.id && m.party_type === partyType && m.movement_type === 'initial');
+          const debit = partyType === 'customer'
+            ? (targetBalance > 0 ? targetBalance : 0)
+            : (targetBalance < 0 ? Math.abs(targetBalance) : 0);
+          const credit = partyType === 'customer'
+            ? (targetBalance < 0 ? Math.abs(targetBalance) : 0)
+            : (targetBalance > 0 ? targetBalance : 0);
           if (existingMvt) {
-            existingMvt.debit = balance < 0 ? Math.abs(balance) : 0;
-            existingMvt.credit = balance > 0 ? balance : 0;
-            existingMvt.balance_after = balance;
+            existingMvt.debit = debit;
+            existingMvt.credit = credit;
+            existingMvt.balance_after = targetBalance;
             return;
           }
+          if (targetBalance === 0) return;
           newAccMovements.push({
             id: generateSecureId('am-init'),
             party_id: party.id,
@@ -795,9 +1027,9 @@ export async function runStrictImport(
             doc_type: 'رصيد افتتاحي',
             doc_id: party.id,
             doc_number: makeInitialMovementDoc(party.id),
-            debit: balance < 0 ? Math.abs(balance) : 0,
-            credit: balance > 0 ? balance : 0,
-            balance_after: balance,
+            debit,
+            credit,
+            balance_after: targetBalance,
             date: todayDate,
             notes: notes || `رصيد افتتاحي مستورد عبر ملف`,
             created_at: nowIso,
@@ -815,9 +1047,9 @@ export async function runStrictImport(
             if (address) existingMatch.address = address;
             if (notes) existingMatch.notes = notes;
             if (type === 'customers' && creditLimit > 0) (existingMatch as Customer).credit_limit = creditLimit;
-            if (balance !== 0) {
+            if (balanceHasValue) {
               existingMatch.opening_balance = balance;
-              buildInitialMovement(existingMatch, false);
+              buildInitialMovement(existingMatch, balance);
             }
             successCount++;
             await reportProgress(i, `جاري معالجة ${typeNameAr} (${(i + 1).toLocaleString('ar-EG')} من ${rows.length.toLocaleString('ar-EG')})...`);
@@ -841,7 +1073,7 @@ export async function runStrictImport(
         newParties.push(newParty);
         byName.set(nameKey, newParty);
         if (phoneKey) byPhone.set(phoneKey, newParty);
-        buildInitialMovement(newParty, true);
+        if (balanceHasValue) buildInitialMovement(newParty, balance);
         successCount++;
       } catch (rowErr: any) {
         errors.push({

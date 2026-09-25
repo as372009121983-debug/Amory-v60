@@ -8,6 +8,8 @@ import {
   ImportResultSummary,
   ImportType,
   detectFileFingerprint,
+  getNumericImportPreview,
+  NumericImportPreview,
   parseCsvText,
   decodeImportFile,
 } from '../lib/strictImporter';
@@ -39,6 +41,7 @@ export const CsvImportModal: React.FC<CsvImportModalProps> = ({ isOpen, onClose,
   const [fileContent, setFileContent] = useState<string>('');
   const [detectedTypeInfo, setDetectedTypeInfo] = useState<{ type: ImportType; typeNameAr: string } | null>(null);
   const [previewRowCount, setPreviewRowCount] = useState<number>(0);
+  const [numericPreview, setNumericPreview] = useState<NumericImportPreview | null>(null);
   const [importMode, setImportMode] = useState<ImportOptions['mode']>('upsert');
   const [isReadingFile, setIsReadingFile] = useState(false);
 
@@ -63,6 +66,7 @@ export const CsvImportModal: React.FC<CsvImportModalProps> = ({ isOpen, onClose,
       setFileContent('');
       setDetectedTypeInfo(null);
       setPreviewRowCount(0);
+      setNumericPreview(null);
       setIsReadingFile(false);
       setIsImporting(false);
       setProgress(null);
@@ -83,12 +87,14 @@ export const CsvImportModal: React.FC<CsvImportModalProps> = ({ isOpen, onClose,
 
       const detected = detectFileFingerprint(headers, currentTargetType);
       setDetectedTypeInfo(detected);
+      setNumericPreview(getNumericImportPreview(text, detected.type));
       selectedTypeRef.current = detected.type;
       setSelectedType(detected.type);
       setErrorMessage(null);
     } catch (err: any) {
       setErrorMessage(err.message);
       setDetectedTypeInfo(null);
+      setNumericPreview(null);
     }
   };
 
@@ -100,6 +106,7 @@ export const CsvImportModal: React.FC<CsvImportModalProps> = ({ isOpen, onClose,
     setFileContent('');
     setDetectedTypeInfo(null);
     setPreviewRowCount(0);
+    setNumericPreview(null);
     setErrorMessage(null);
     setResultSummary(null);
     setProgress(null);
@@ -195,6 +202,7 @@ export const CsvImportModal: React.FC<CsvImportModalProps> = ({ isOpen, onClose,
     setFileContent('');
     setDetectedTypeInfo(null);
     setPreviewRowCount(0);
+    setNumericPreview(null);
     setProgress(null);
     setResultSummary(null);
     setErrorMessage(null);
@@ -361,41 +369,33 @@ export const CsvImportModal: React.FC<CsvImportModalProps> = ({ isOpen, onClose,
         {/* Step 2: Upload File Dropzone */}
         {!selectedFile && (
           <div
-            role="button"
-            tabIndex={0}
             aria-busy={isReadingFile}
-            onClick={() => {
-              if (!isReadingFile && !isImporting) fileInputRef.current?.click();
-            }}
-            onKeyDown={(e) => {
-              if ((e.key === 'Enter' || e.key === ' ') && !isReadingFile && !isImporting) {
-                e.preventDefault();
-                fileInputRef.current?.click();
-              }
-            }}
             onDragOver={(e) => {
               e.preventDefault();
               e.dataTransfer.dropEffect = 'copy';
             }}
             onDrop={handleFileDrop}
-            className="border-2 border-dashed border-slate-300 dark:border-zinc-700 hover:border-amber-500 rounded-2xl p-7 text-center bg-slate-50/70 hover:bg-slate-100/70 dark:bg-zinc-900/40 dark:hover:bg-zinc-900/70 cursor-pointer transition-all space-y-2.5"
+            className="border-2 border-dashed border-slate-300 dark:border-zinc-700 rounded-2xl p-4 sm:p-7 text-center bg-slate-50/70 dark:bg-zinc-900/40 transition-all space-y-2.5"
           >
             <input
               type="file"
               ref={fileInputRef}
+              aria-label="اختيار ملف بيانات للاستيراد"
               accept=".csv,.txt,.tsv,.xlsx,.xls,text/csv,text/tab-separated-values,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
               onChange={handleFileChange}
-              onClick={(e) => e.stopPropagation()}
-              className="hidden"
+              className="sr-only"
             />
-            <div className="w-12 h-12 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-500 flex items-center justify-center mx-auto">
-              <Upload className="w-6 h-6" />
-            </div>
-            <div>
-              <div className="text-sm font-bold text-slate-800 dark:text-white">اضغط لاختيار ملف CSV أو Excel أو اسحبه إلى هنا</div>
-              <div className="text-xs text-slate-500 dark:text-zinc-400 mt-1">
-                يدعم CSV وExcel (.xlsx/.xls) ويكتشف ترميز العربية تلقائيًا
-              </div>
+            <button
+              type="button"
+              disabled={isReadingFile || isImporting}
+              onClick={() => fileInputRef.current?.click()}
+              className="w-full min-h-14 rounded-xl px-4 py-3 flex items-center justify-center gap-2.5 bg-amber-500 hover:bg-amber-400 disabled:opacity-60 text-zinc-950 font-black text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-600 focus-visible:ring-offset-2"
+            >
+              <Upload className="w-5 h-5 shrink-0" />
+              <span>اختيار ملف من الهاتف أو الكمبيوتر</span>
+            </button>
+            <div className="text-xs text-slate-500 dark:text-zinc-400">
+              يدعم CSV وExcel (.xlsx/.xls). على الكمبيوتر يمكنك أيضاً سحب الملف وإفلاته هنا.
             </div>
           </div>
         )}
@@ -451,6 +451,36 @@ export const CsvImportModal: React.FC<CsvImportModalProps> = ({ isOpen, onClose,
                 </button>
               )}
             </div>
+
+            {numericPreview && (
+              <div
+                role="status"
+                className={`p-3 rounded-xl border text-xs space-y-1 ${
+                  !numericPreview.header || numericPreview.invalidRows > 0
+                    ? 'bg-amber-50 dark:bg-amber-950/30 border-amber-300 dark:border-amber-800 text-amber-900 dark:text-amber-200'
+                    : 'bg-slate-100 dark:bg-zinc-950 border-slate-200 dark:border-zinc-800 text-slate-700 dark:text-zinc-300'
+                }`}
+              >
+                <div className="font-bold">
+                  مراجعة {numericPreview.label} قبل الحفظ
+                  {numericPreview.header ? ` • العمود: ${numericPreview.header}` : ' • لم يتم العثور على عمود معروف'}
+                </div>
+                {!numericPreview.header ? (
+                  <div>
+                    {selectedType === 'items'
+                      ? 'لم يتم التعرف على عمود للكمية؛ ستُضاف المنتجات بمخزون صفر. أعد اختيار الملف إذا كانت الكميات موجودة فيه.'
+                      : 'لم يتم التعرف على عمود للرصيد؛ لن يُضاف رصيد افتتاحي للأطراف.'}
+                  </div>
+                ) : (
+                  <div>
+                    قيم مقروءة: {numericPreview.populatedRows.toLocaleString('ar-EG')} • قيم غير صالحة: {numericPreview.invalidRows.toLocaleString('ar-EG')} • غير الصفرية: {numericPreview.nonZeroRows.toLocaleString('ar-EG')} • الإجمالي: {numericPreview.total.toLocaleString('ar-EG', { maximumFractionDigits: 2 })}
+                  </div>
+                )}
+                {numericPreview.invalidRows > 0 && (
+                  <div>الصفوف التي تحتوي رقماً غير مفهوم ستُستبعد ويظهر سببها في تقرير الأخطاء.</div>
+                )}
+              </div>
+            )}
 
             {/* Note on Party files */}
             {(selectedType === 'customers' || selectedType === 'suppliers') && (

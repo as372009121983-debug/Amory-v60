@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CSV_TEMPLATES,
   detectFileFingerprint,
+  parseArabicNumber,
   parseCsvText,
   runStrictImport,
 } from './strictImporter';
@@ -44,6 +45,14 @@ describe('strict importer', () => {
 
     expect(parsed.headers).toHaveLength(2);
     expect(parsed.rows[0]['ملاحظات']).toBe('مهم');
+  });
+
+  it('parses Arabic/Persian digits, locale separators, and accounting negatives', () => {
+    expect(parseArabicNumber('١٬٢٣٤٫٥٠')).toBe(1234.5);
+    expect(parseArabicNumber('۱۲۳')).toBe(123);
+    expect(parseArabicNumber('1,234')).toBe(1234);
+    expect(parseArabicNumber('12,5')).toBe(12.5);
+    expect(parseArabicNumber('(1,234.50)')).toBe(-1234.5);
   });
 
   it('round-trips each supplied CSV template through the parser', () => {
@@ -96,6 +105,111 @@ describe('strict importer', () => {
     );
     expect(supplierResult.successCount).toBe(1);
     expect(storage.getSuppliers().some((supplier) => supplier.name === 'مورد اختبار الاستيراد')).toBe(true);
+  });
+
+  it('imports localized stock values and reconciles later imports to the file quantity', async () => {
+    await storage.ready;
+    const user = storage.getUsers()[0];
+    if (!user) throw new Error('The test storage was not initialized.');
+
+    await runStrictImport(
+      'كود الصنف,اسم الصنف,كمية المخزون\nSTOCK-LOCALE-001,اختبار كمية محلية,١٬٢٣٤',
+      { mode: 'upsert' },
+      user,
+      undefined,
+      'items',
+    );
+    let importedItem = storage.getItems().find((item) => item.code === 'STOCK-LOCALE-001');
+    expect(importedItem?.current_stock).toBe(1234);
+
+    await runStrictImport(
+      'كود الصنف,اسم الصنف,الكمية الحالية\nSTOCK-LOCALE-001,اختبار كمية محلية,5',
+      { mode: 'upsert' },
+      user,
+      undefined,
+      'items',
+    );
+    importedItem = storage.getItems().find((item) => item.code === 'STOCK-LOCALE-001');
+    expect(importedItem?.current_stock).toBe(5);
+
+    await runStrictImport(
+      'كود الصنف,اسم الصنف\nSTOCK-LOCALE-001,اختبار كمية محلية بدون عمود كمية',
+      { mode: 'upsert' },
+      user,
+      undefined,
+      'items',
+    );
+    importedItem = storage.getItems().find((item) => item.code === 'STOCK-LOCALE-001');
+    expect(importedItem?.current_stock).toBe(5);
+  });
+
+  it('keeps customer debts positive, preserves explicit credit balances, and updates one opening movement', async () => {
+    await storage.ready;
+    const user = storage.getUsers()[0];
+    if (!user) throw new Error('The test storage was not initialized.');
+
+    const debtResult = await runStrictImport(
+      'اسم العميل,مديونية\nعميل اختبار رصيد مدين,-250\nعميل اختبار رصيد مدين,-300',
+      { mode: 'upsert' },
+      user,
+      undefined,
+      'customers',
+    );
+    expect(debtResult.duplicateCount).toBe(1);
+
+    const debtor = storage.getCustomers().find((customer) => customer.name === 'عميل اختبار رصيد مدين');
+    expect(debtor?.current_balance).toBe(300);
+    const debtorMovements = storage.getAccountMovements().filter(
+      (movement) => movement.party_id === debtor?.id && movement.movement_type === 'initial',
+    );
+    expect(debtorMovements).toHaveLength(1);
+    expect(debtorMovements[0].debit).toBe(300);
+    expect(debtorMovements[0].credit).toBe(0);
+
+    await runStrictImport(
+      'اسم العميل,الرصيد الحالي\nعميل اختبار رصيد دائن,-75',
+      { mode: 'upsert' },
+      user,
+      undefined,
+      'customers',
+    );
+    const creditor = storage.getCustomers().find((customer) => customer.name === 'عميل اختبار رصيد دائن');
+    expect(creditor?.current_balance).toBe(-75);
+    const creditorMovement = storage.getAccountMovements().find(
+      (movement) => movement.party_id === creditor?.id && movement.movement_type === 'initial',
+    );
+    expect(creditorMovement?.debit).toBe(0);
+    expect(creditorMovement?.credit).toBe(75);
+
+    await runStrictImport(
+      'اسم العميل,الرصيد الحالي\nعميل اختبار رصيد دائن,0',
+      { mode: 'upsert' },
+      user,
+      undefined,
+      'customers',
+    );
+    expect(storage.getCustomers().find((customer) => customer.id === creditor?.id)?.current_balance).toBe(0);
+  });
+
+  it('imports supplier payable balances using the supplier sign convention', async () => {
+    await storage.ready;
+    const user = storage.getUsers()[0];
+    if (!user) throw new Error('The test storage was not initialized.');
+
+    await runStrictImport(
+      'اسم المورد,الرصيد المستحق له\nمورد اختبار مستحق,400',
+      { mode: 'upsert' },
+      user,
+      undefined,
+      'suppliers',
+    );
+    const supplier = storage.getSuppliers().find((entry) => entry.name === 'مورد اختبار مستحق');
+    expect(supplier?.current_balance).toBe(400);
+    const movement = storage.getAccountMovements().find(
+      (entry) => entry.party_id === supplier?.id && entry.movement_type === 'initial',
+    );
+    expect(movement?.debit).toBe(0);
+    expect(movement?.credit).toBe(400);
   });
 
   it('continues reporting progress when duplicate rows are skipped', async () => {
